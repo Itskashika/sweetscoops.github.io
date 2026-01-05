@@ -1,135 +1,73 @@
 const express = require("express");
-const mysql = require("mysql2");
-const bodyParser = require("body-parser");
-const cors = require("cors");
+const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
+const cors = require("cors");
+const bodyParser = require("body-parser");
 const path = require("path");
 
 const app = express();
-const port = 5000;
-
-// ------------------- MIDDLEWARE -------------------
 app.use(cors());
 app.use(bodyParser.json());
 
-// Serve static files from "public" folder
-app.use(express.static(path.join(__dirname, "public")));
+// 🔥 Correct Public Path
+const publicPath = path.join(__dirname, "public");
+app.use(express.static(publicPath));
 
-// ------------------- MYSQL CONNECTION -------------------
-const db = mysql.createConnection({
-    host: "localhost",
-    user: "root",
-    password: "kashika212M123",
-    database: "sweet_scoops"
+console.log("Serving Public Folder:", publicPath);
+
+// ------------------ DEFAULT ROUTES ------------------
+app.get("/", (req, res) => {
+    res.sendFile(path.join(publicPath, "login.html"));
 });
 
-db.connect((err) => {
-    if (err) {
-        console.log("❌ MySQL Connection Error:", err);
-    } else {
-        console.log("✅ Connected to MySQL");
-    }
+app.get("/login", (req, res) => {
+    res.sendFile(path.join(publicPath, "login.html"));
 });
 
-// ------------------- AUTH ROUTES -------------------
+// ------------------ DB CONNECTION ------------------
+mongoose.connect("mongodb://127.0.0.1:27017/sweetscoops", {
+    useNewUrlParser: true,
+    useUnifiedTopology: true
+})
+.then(() => console.log("MongoDB Connected"))
+.catch(err => console.log(err));
 
-// SIGNUP
+// ------------------ USER SCHEMA ------------------
+const UserSchema = new mongoose.Schema({
+    name: String,
+    email: { type: String, unique: true },
+    password: String
+});
+
+const User = mongoose.model("User", UserSchema);
+
+// ------------------ SIGNUP API ------------------
 app.post("/signup", async (req, res) => {
     const { name, email, password } = req.body;
 
-    try {
-        const hashedPassword = await bcrypt.hash(password, 10);
-        const query = "INSERT INTO users (name, email, password) VALUES (?, ?, ?)";
+    const usedEmail = await User.findOne({ email });
+    if (usedEmail) return res.json({ success: false, msg: "Email already exists" });
 
-        db.query(query, [name, email, hashedPassword], (err) => {
-            if (err) {
-                if (err.code === "ER_DUP_ENTRY") {
-                    return res.json({ success: false, msg: "Email already registered!" });
-                }
-                return res.json({ success: false, msg: "Database error" });
-            }
-            res.json({ success: true, msg: "Signup successful!" });
-        });
-    } catch {
-        res.json({ success: false, msg: "Server error" });
-    }
+    const hashPassword = await bcrypt.hash(password, 10);
+
+    const newUser = new User({ name, email, password: hashPassword });
+    await newUser.save();
+
+    res.json({ success: true, msg: "Account created successfully" });
 });
 
-// LOGIN
-app.post("/login", (req, res) => {
+// ------------------ LOGIN API ------------------
+app.post("/login", async (req, res) => {
     const { email, password } = req.body;
 
-    const query = "SELECT * FROM users WHERE email = ?";
+    const user = await User.findOne({ email });
+    if (!user) return res.json({ success: false, msg: "Email not found" });
 
-    db.query(query, [email], async (err, results) => {
-        if (err) return res.json({ success: false, msg: "Database error" });
-        if (results.length === 0) return res.json({ success: false, msg: "User not found!" });
+    const match = await bcrypt.compare(password, user.password);
+    if (!match) return res.json({ success: false, msg: "Incorrect password" });
 
-        const user = results[0];
-        const isMatch = await bcrypt.compare(password, user.password);
-
-        if (!isMatch) return res.json({ success: false, msg: "Incorrect password!" });
-
-        // ✅ Frontend stores name in localStorage
-        res.json({
-            success: true,
-            msg: `Welcome back, ${user.name}!`,
-            name: user.name
-        });
-    });
+    res.json({ success: true, msg: "Login successful", user });
 });
 
-// ------------------- ORDER ROUTES -------------------
-
-// SAVE ORDER (CHECKOUT)
-app.post("/api/orders", (req, res) => {
-    const { username, items, total } = req.body;
-
-    if (!username || !items || !total) {
-        return res.status(400).json({ error: "Missing order data" });
-    }
-
-    const sql =
-        "INSERT INTO orders (username, items, total, status) VALUES (?, ?, ?, 'Placed')";
-
-    db.query(sql, [username, items, total], (err) => {
-        if (err) {
-            console.error("❌ Order Insert Error:", err);
-            return res.status(500).json({ error: "Order failed" });
-        }
-        res.json({ success: true, message: "Order placed successfully" });
-    });
-});
-
-// GET ORDER HISTORY (PROFILE PAGE)
-app.get("/api/orders/:username", (req, res) => {
-    const username = req.params.username;
-
-    const sql =
-        "SELECT * FROM orders WHERE username = ? ORDER BY created_at DESC";
-
-    db.query(sql, [username], (err, result) => {
-        if (err) {
-            console.error("❌ Fetch Orders Error:", err);
-            return res.status(500).json({ error: "Database error" });
-        }
-        res.json(result);
-    });
-});
-
-// ------------------- PAGE ROUTES -------------------
-
-// Serve login page by default
-app.get("/", (req, res) => {
-    res.sendFile(path.join(__dirname, "public", "login.html"));
-});
-
-// Redirect /home to index.html
-app.get("/home", (req, res) => {
-    res.sendFile(path.join(__dirname, "public", "index.html"));
-});
-
-// ------------------- START SERVER -------------------
-app.listen(port, () => {
-    console.log(`✅ Server running at http://localhost:${port}`);
-});
+// ------------------ START SERVER ------------------
+app.listen(5000, () => console.log("Server running on http://localhost:5000"));
